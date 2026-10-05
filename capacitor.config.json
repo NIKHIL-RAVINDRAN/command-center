@@ -1,0 +1,6 @@
+{
+  "appId": "com.nikhil.commandcenter",
+  "appName": "Command Center",
+  "webDir": "www",
+  "android": { "backgroundColor": "#000000" }
+}
