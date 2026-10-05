@@ -20,6 +20,15 @@ jobs:
         run: |
           npx cap add android
           npx cap sync android
+      - name: Add step counter
+        run: |
+          SRC=android/app/src/main/java/com/nikhil/commandcenter
+          mkdir -p $SRC
+          cp native/*.java $SRC/
+          sed -i 's#</manifest>#    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />\n</manifest>#' android/app/src/main/AndroidManifest.xml
+          sed -i '0,/dependencies {/s//dependencies {\n    implementation "androidx.work:work-runtime:2.9.1"/' android/app/build.gradle
+          grep -n "ACTIVITY_RECOGNITION" android/app/src/main/AndroidManifest.xml
+          grep -n "work-runtime" android/app/build.gradle
       - name: Build APK
         run: |
           cd android

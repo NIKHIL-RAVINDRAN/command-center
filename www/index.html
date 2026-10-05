@@ -205,6 +205,10 @@ nav button.on::before{content:"";position:absolute;top:0;left:30%;right:30%;heig
 .seg2 button.on{background:var(--red);color:#fff}
 .field textarea{width:100%;border-radius:12px;border:1px solid var(--line);background:var(--s1);padding:10px 12px;font:inherit;font-size:15px;color:var(--text);resize:vertical}
 .field textarea:focus{border-color:var(--red);outline:none}
+.pedo{display:flex;align-items:center;gap:8px;width:100%;margin-top:14px;padding:10px 12px;border-radius:12px;background:var(--s2);color:var(--muted);font-size:13px;text-align:left}
+.pedo .dot{width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 0 3px var(--red-wash);flex:none}
+.pedo .chg{margin-left:auto;color:var(--text);font-weight:600}
+.cuts{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px}
 .x{position:absolute;top:12px;right:12px;width:40px;height:40px;border-radius:12px;background:var(--s3);font-size:16px;color:var(--muted)}
 .sheet h2{padding-right:44px}
 .grab{width:40px;height:4px;border-radius:4px;background:var(--dim);margin:0 auto 14px}
@@ -428,16 +432,18 @@ function initStorage(){
 }
 
 /* =================== SCORING =================== */
+const auto=(d,k)=>(d.auto&&d.auto[k])||0;
+const stp=(d,k)=>Math.max(0,(d.steps[k]||0)+auto(d,k));
 function exList(i){return (S.workouts[i]||[]).flatMap(g=>g.x)}
 function tasks(k){
   const d=peek(k)||blank(k), i=dow(fromKey(k)), rest=i===6;
   const meals=SLOTS.filter(s=>d.meals[s.k]).length;
   const sup=SUPP_IDS.filter(id=>d.sup[id]).length;
-  const office=(d.steps.office||0)>=STEP_GOAL, gym=(d.steps.gym||0)>=STEP_GOAL;
+  const so=stp(d,"office"),sg=stp(d,"gym"),office=so>=STEP_GOAL,gym=sg>=STEP_GOAL;
   const wo=rest?null:!!d.wo;
   const total=4+7+2+(rest?0:1);
   const done=meals+sup+(office?1:0)+(gym?1:0)+(wo?1:0);
-  return {meals,sup,office,gym,wo,rest,total,done,steps:(d.steps.office||0)+(d.steps.gym||0),pct:Math.round(done/total*100)};
+  return {meals,sup,office,gym,wo,rest,total,done,steps:so+sg,pct:Math.round(done/total*100)};
 }
 function streak(){
   let n=0,d=new Date(NOW);
@@ -502,7 +508,7 @@ function renderToday(){
   }
 
   // walk
-  const o=d.steps.office||0,g=d.steps.gym||0,tot=o+g;
+  const o=stp(d,"office"),g=stp(d,"gym"),tot=o+g;
   const seg=(key,label,val)=>`<div class="seg">
      <div class="seg-h"><span class="t">${label}</span><span class="v ${val>=STEP_GOAL?"ok":""}">${fmt(val)} <small style="color:var(--dim)">/ 6,000</small></span></div>
      <div class="bar"><i style="width:${Math.min(100,val/STEP_GOAL*100)}%"></i></div>
@@ -515,7 +521,7 @@ function renderToday(){
   $("t-walk").innerHTML=`<div class="card ${tot>=12000?"ok":""}">
      <div class="steps-total"><div class="n">${fmt(tot)}<small> / 12,000</small></div><div class="g">${tot>=12000?"Goal hit ✓":fmt(Math.max(0,12000-tot))+" to go"}</div></div>
      <div class="bar"><i style="width:${Math.min(100,tot/120)}%"></i></div>
-     ${seg("office","🏢 Office",o)}${seg("gym","🌙 Gym + night walk",g)}</div>`;
+     ${seg("office","🏢 Office",o)}${seg("gym","🌙 Gym + night walk",g)}${pedoRow()}</div>`;
 
   // take
   $("take-meta").textContent=`${t.sup} / 7 taken`;
@@ -641,6 +647,74 @@ function renderWeek(){
     <div><b>${woDays}/${Math.min(past,6)}</b><span>workouts done</span></div><div><b>${stepDays}/${past}</b><span>12K step days</span></div>`;
 }
 
+/* =================== STEP COUNTER (Android app only) =================== */
+const PEDO={plugin:null,available:false,granted:false,busy:false};
+if(typeof S.cut!=="number")S.cut=18;
+function stepsPlugin(){
+  const C=window.Capacitor;
+  if(!C||!C.isNativePlatform||!C.isNativePlatform())return null;
+  if(C.Plugins&&C.Plugins.Steps)return C.Plugins.Steps;
+  if(C.registerPlugin)return C.registerPlugin("Steps");
+  if(C.nativePromise)return{status:o=>C.nativePromise("Steps","status",o||{}),requestAccess:o=>C.nativePromise("Steps","requestAccess",o||{}),read:o=>C.nativePromise("Steps","read",o||{})};
+  return null;
+}
+const hr=h=>{const x=h%12||12;return x+(h<12?" AM":" PM")};
+function pedoRow(){
+  if(!PEDO.plugin)return "";
+  if(!PEDO.available)return `<div class="pedo">📱 This phone has no step sensor. Add steps by hand.</div>`;
+  if(!PEDO.granted)return `<button class="cta" data-pedo="on" style="margin-top:14px">📱 Turn on automatic step counting</button>`;
+  return `<button class="pedo" data-cut="1"><span class="dot"></span>Counting automatically · before ${hr(S.cut)} = office<span class="chg">Change</span></button>`;
+}
+function applySnapshots(list){
+  const snaps=list.filter(s=>s&&s.v>=0).sort((a,b)=>a.t-b.t);
+  if(snaps.length<2)return false;
+  const acc={};
+  for(let i=1;i<snaps.length;i++){
+    let dv=snaps[i].v-snaps[i-1].v;
+    if(dv<0)dv=snaps[i].v;           // phone restarted, counter began again
+    if(dv<=0||dv>40000)continue;
+    const dt=new Date(snaps[i].t),k=keyOf(dt),b=dt.getHours()<S.cut?"office":"gym";
+    (acc[k]=acc[k]||{office:0,gym:0})[b]+=Math.round(dv);
+  }
+  let changed=false;
+  for(const k in acc){
+    const d=day(k);d.auto=d.auto||{office:0,gym:0};
+    for(const b of ["office","gym"]){if(acc[k][b]>(d.auto[b]||0)){d.auto[b]=acc[k][b];changed=true}}
+  }
+  if(changed){saveLocal()}
+  return changed;
+}
+async function pedoRead(){
+  if(!PEDO.plugin||!PEDO.granted||PEDO.busy)return;
+  PEDO.busy=true;
+  try{
+    const r=await PEDO.plugin.read({});
+    const list=typeof r.snapshots==="string"?JSON.parse(r.snapshots):(r.snapshots||[]);
+    if(applySnapshots(list))renderAll();
+  }catch(e){}
+  PEDO.busy=false;
+}
+async function pedoInit(){
+  PEDO.plugin=stepsPlugin(); if(!PEDO.plugin)return;
+  try{const s=await PEDO.plugin.status({});PEDO.available=!!s.available;PEDO.granted=!!s.granted}catch(e){PEDO.available=false}
+  renderToday(); pedoRead();
+  setInterval(()=>{if(!document.hidden)pedoRead()},60000);
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden)pedoRead()});
+}
+async function pedoEnable(){
+  try{const s=await PEDO.plugin.requestAccess({});PEDO.available=!!s.available;PEDO.granted=!!s.granted}catch(e){}
+  renderToday();
+  if(PEDO.granted){toast("Step counting on");pedoRead()}
+  else toast("Allow “Physical activity” in app settings to count steps");
+}
+function openCutEditor(){
+  const opts=[15,16,17,18,19,20,21];
+  openSheet(`<div class="kick">🚶 Automatic steps</div><h2>When does office end?</h2>
+   <p style="color:var(--muted);margin:6px 0 14px">Steps before this time count as office. Steps after it count as gym + night walk.</p>
+   <div class="cuts">${opts.map(h=>`<button class="chip ${h===S.cut?"red":""}" data-setcut="${h}">${hr(h)}</button>`).join("")}</div>
+   <div class="note">Phones only report steps every few minutes, so steps near the cut-off time can land on either side.</div>`);
+}
+
 /* =================== SHEET =================== */
 let lastFocus=null;
 function openSheet(html){lastFocus=document.activeElement;$("sheet-body").innerHTML=html;$("sheet").scrollTop=0;$("scrim").classList.add("on");$("sheet").classList.add("on")}
@@ -649,7 +723,7 @@ $("scrim").onclick=closeSheet;$("sheet-x").onclick=closeSheet;
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeSheet()});
 
 function openStepEditor(key){
-  const d=day(TODAY),cur=d.steps[key]||0,label=key==="office"?"🏢 Office":"🌙 Gym + night walk";
+  const d=day(TODAY),cur=stp(d,key),label=key==="office"?"🏢 Office":"🌙 Gym + night walk";
   openSheet(`<div class="kick">${label}</div><h2>Add steps</h2>
    <p style="color:var(--muted);margin:6px 0 16px">Currently ${fmt(cur)} / 6,000</p>
    <label class="field"><span>Steps to add</span><input id="st-add" inputmode="numeric" pattern="[0-9]*" placeholder="e.g. 2500"></label>
@@ -659,7 +733,7 @@ function openStepEditor(key){
    <div class="btnrow"><button class="del" id="st-zero">Reset</button><button class="cta" id="st-save" style="background:var(--s3)">Set total</button></div>`);
   setTimeout(()=>$("st-add").focus(),300);
   const num=v=>Math.max(0,Math.min(99999,parseInt(String(v).replace(/\D/g,""),10)||0));
-  const apply=v=>{d.steps[key]=v;persist(TODAY);closeSheet();renderAll()};
+  const apply=v=>{d.steps[key]=v-auto(d,key);persist(TODAY);closeSheet();renderAll()};
   $("st-go").onclick=()=>{const a=num($("st-add").value);if(!a){$("st-add").focus();return}apply(cur+a);toast(`+${fmt(a)} steps`)};
   $("st-add").onkeydown=e=>{if(e.key==="Enter")$("st-go").click()};
   $("st-save").onclick=()=>{apply(num($("st-set").value));toast("Steps updated")};
@@ -676,6 +750,9 @@ document.addEventListener("click",e=>{
   if(ds.recipe){const[i,k]=ds.recipe.split(":");openRecipe(+i,k);return}
   if(ds.sup){const d=day(TODAY);d.sup[ds.sup]=!d.sup[ds.sup];persist(TODAY);vibe();renderAll();return}
   if(ds.step){const[k,v]=ds.step.split(":");const d=day(TODAY);d.steps[k]=(d.steps[k]||0)+(+v);persist(TODAY);vibe();renderAll();toast(`+${fmt(+v)} steps`);return}
+  if(ds.pedo){pedoEnable();return}
+  if(ds.cut){openCutEditor();return}
+  if(ds.setcut){S.cut=+ds.setcut;saveLocal();closeSheet();renderAll();toast(`Office ends at ${hr(S.cut)}`);return}
   if(ds.stepedit){openStepEditor(ds.stepedit);return}
   if(ds.ex){const d=day(TODAY);d.ex[ds.ex]=!d.ex[ds.ex];const L=exList(TDOW);if(L.length&&L.every(x=>d.ex[x.id])&&!d.wo){d.wo=true;toast("Workout complete 💪")}else if(!d.ex[ds.ex])d.wo=false;persist(TODAY);vibe();renderAll();return}
   if(ds.wo){const d=day(TODAY);d.wo=!d.wo;if(d.wo)exList(TDOW).forEach(x=>d.ex[x.id]=true);persist(TODAY);vibe();renderAll();if(d.wo)toast("Workout complete 💪");return}
@@ -702,7 +779,7 @@ function checkDate(){const n=new Date();if(keyOf(n)!==TODAY){NOW=n;TODAY=keyOf(n
 document.addEventListener("visibilitychange",()=>{if(!document.hidden)checkDate()});
 setInterval(checkDate,60000);
 
-initStorage();day(TODAY);renderAll();
+initStorage();day(TODAY);renderAll();pedoInit();
 </script>
 </body>
 </html>
